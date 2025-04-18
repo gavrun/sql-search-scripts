@@ -14,7 +14,7 @@ SET @FullRowResultRows = 3          /* Number of full rows to output per one mat
 SET @SearchStrTableName = NULL      /* Limit search to a specific table nam, NULL for all tables, uses LIKE syntax */
 SET @SearchStrColumnName = NULL     /* Limit search to a specific column name, NULL for all columns, uses LIKE syntax %email% */
 SET @SearchStrInXML = 0             /* Include XML columns, 0 or 1. Searching XML data may be slow */
-SET @SearchStrInDateTime = 0        /* */
+SET @SearchStrInDateTime = 0        /* Include DateTime columns, 0 or 1. */
 
 /* CREATE TEMPORARY TABLE FOR RESULTS */
 
@@ -40,6 +40,8 @@ DECLARE @TableName nvarchar(256) = '',
 -- Quote search string for using in dynamic SQL
 SET @QuotedSearchStrColumnValue = QUOTENAME(@SearchStrColumnValue,'''')
 
+PRINT 'DEBUG: Quoted Search Value: ' + @QuotedSearchStrColumnValue
+
 -- Temp table to hold column names and data types per table
 DECLARE @ColumnNameTable TABLE (
     COLUMN_NAME nvarchar(128),
@@ -60,6 +62,8 @@ BEGIN
 
     IF @TableName IS NOT NULL --process table
     BEGIN
+        PRINT 'DEBUG: LOOP'
+        PRINT 'DEBUG: Processing Table Name: ' + @TableName
 
         /* SELECT COLUMNS AND SEARCH FOR MATCHES */
 
@@ -93,61 +97,86 @@ BEGIN
                 END  + 
             ',COLUMN_NAME)'
 
+        PRINT 'DEBUG: Column Selection SQL:'
+        PRINT @sql
+        
         -- Insert selected columns into temp table
+        DELETE FROM @ColumnNameTable
         INSERT INTO @ColumnNameTable
         EXEC (@sql)
+        PRINT 'Columns selected for ' + @TableName + '. Count: ' + CAST(@@ROWCOUNT AS VARCHAR(10))
 
         -- INNER LOOP: Iterate over columns in current table
         WHILE EXISTS (SELECT TOP 1 COLUMN_NAME FROM @ColumnNameTable)
         BEGIN
-            PRINT @ColumnName
+            PRINT 'DEBUG: INNER'
 
             -- Get the next column to process
             SELECT TOP 1 @ColumnName = COLUMN_NAME,@ColumnType = DATA_TYPE 
             FROM @ColumnNameTable
+
+            PRINT 'DEBUG: Processing: Table=' + @TableName + ', Column=' + @ColumnName + ', Type=' + @ColumnType
             
+            -- Get unified string to compare by like SearchStrColumnValue, Style 121 'yyyy-mm-dd hh:mi:ss.mmm', Style 114 'hh:mi:ss:mmm(24h)'
+            DECLARE @SearchExpression nvarchar(max)
+            DECLARE @SelectExpression nvarchar(max)
+            SET @SearchExpression = 
+                CASE @ColumnType 
+                    WHEN 'xml' THEN 'CAST(' + @ColumnName + ' AS nvarchar(MAX))'
+                    WHEN 'timestamp' THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + ')'
+                    WHEN 'datetime' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'smalldatetime' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'date' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'time' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 114)'
+                    WHEN 'datetime2' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'datetimeoffset' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    ELSE 'CAST(' + @ColumnName + ' AS nvarchar(MAX))' -- fallback for char, varchar, numeric, etc.
+                END
+            SET @SelectExpression = 
+                CASE @ColumnType 
+                    WHEN 'xml' THEN 'LEFT(CAST(' + @ColumnName + ' AS nvarchar(MAX)), 4096)'
+                    WHEN 'timestamp' THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + ')'
+                    WHEN 'datetime' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'smalldatetime' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'date' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'time' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 114)'
+                    WHEN 'datetime2' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    WHEN 'datetimeoffset' THEN 'CONVERT(nvarchar(50), ' + @ColumnName + ', 121)'
+                    ELSE 'LEFT(CAST(' + @ColumnName + ' AS nvarchar(MAX)), 4096)' 
+                END
             -- Build dynamic SQL for searching the value in the column
-            SET @sql = 'SELECT ''' + @TableName + ''',''' + @ColumnName + ''',' + 
-                CASE @ColumnType 
-                    WHEN 'xml' 
-                        THEN 'LEFT(CAST(' + @ColumnName + ' AS nvarchar(MAX)), 4096),''' --handle XML columns
-                    WHEN 'timestamp' 
-                        THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + '),''' 
-                    ELSE 'LEFT(CAST(' + @ColumnName + 'AS nvarchar(MAX)), 4096),''' --handle DateTime columns
-                END + @ColumnType + '''
-                FROM ' + @TableName + ' (NOLOCK) ' + ' WHERE ' + 
-                CASE @ColumnType 
-                    WHEN 'xml' 
-                        THEN 'CAST(' + @ColumnName + ' AS nvarchar(MAX))' --handle XML columns
-                    WHEN 'timestamp' 
-                        THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + ')'
-                    ELSE 'CAST(' + @ColumnName + ' AS nvarchar(MAX))' 
-                END + ' LIKE ' + @QuotedSearchStrColumnValue --handle DateTime columns 
+            SET @sql = 'SELECT ''' + @TableName + ''',''' + @ColumnName + ''',' + @SelectExpression + ',''' + @ColumnType + '''
+                FROM ' + @TableName + ' (NOLOCK) 
+                WHERE ' + @SearchExpression + ' LIKE ' + @QuotedSearchStrColumnValue
 
             -- Run search query and store result
             INSERT INTO #Results
             EXEC(@sql)
 
+            PRINT 'DEBUG: Search SQL:'
+            PRINT 'Search Expression: ' + @SearchExpression
+            PRINT 'Select Expression: ' + @SelectExpression
+            
             -- Output full matching rows for the first few matches (option)
             IF @@ROWCOUNT > 0 IF @FullRowResult = 1
             BEGIN
                 SET @sql = 'SELECT TOP ' + CAST(@FullRowResultRows AS VARCHAR(3)) + 
                     ' ''' + @TableName + ''' AS [TableFound],''' + @ColumnName + ''' AS [ColumnFound],''FullRow>'' AS [FullRow>],*' +
                     ' FROM ' + @TableName + ' (NOLOCK) ' +
-                    ' WHERE ' + 
-                    CASE @ColumnType 
-                        WHEN 'xml' 
-                            THEN 'CAST(' + @ColumnName + ' AS nvarchar(MAX))'
-                        WHEN 'timestamp' 
-                            THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + ')'
-                        ELSE 'CAST(' + @ColumnName + ' AS nvarchar(MAX))'
-                    END + ' LIKE ' + @QuotedSearchStrColumnValue
+                    ' WHERE ' + @SearchExpression + ' LIKE ' + @QuotedSearchStrColumnValue
                 EXEC(@sql)
+
+                PRINT 'DEBUG: Full Row SQL:'
+                PRINT @sql
             END
 
             -- Remove processed column from temp list
             DELETE FROM @ColumnNameTable WHERE COLUMN_NAME = @ColumnName
+
+            PRINT 'DEBUG: INNER END'
         END
+
+        PRINT 'DEBUG: LOOP END'
     END
 END
 
