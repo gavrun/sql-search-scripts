@@ -1,5 +1,3 @@
-/* DECLARING VARIABLES AND PARAMETERS FOR SEARCH */
-
 DECLARE @SearchStrTableName nvarchar(255), 
         @SearchStrColumnName nvarchar(255), 
         @SearchStrColumnValue nvarchar(255), 
@@ -7,31 +5,28 @@ DECLARE @SearchStrTableName nvarchar(255),
         @FullRowResult bit, 
         @FullRowResultRows int
 
-SET @SearchStrColumnValue = '%YOUR_TEXT_HERE%' /* uses LIKE syntax */
+SET @SearchStrColumnValue = '%YOUR_SEARCH_STRING_HERE%' 
 SET @FullRowResult = 1
 SET @FullRowResultRows = 3
-SET @SearchStrTableName = NULL /* NULL for all tables, uses LIKE syntax */
-SET @SearchStrColumnName = NULL /* NULL for all columns, uses LIKE syntax */
-SET @SearchStrInXML = 1 /* Flip 0 to 1. Searching XML data may be slow */
+SET @SearchStrTableName = NULL
+SET @SearchStrColumnName = NULL
+SET @SearchStrInXML = 1 
 
-/* CREATING A TEMPORARY TABLE FOR RESULTS */
-
-IF OBJECT_ID('tempdb..#Results') IS NOT NULL DROP TABLE #Results
+IF OBJECT_ID('tempdb..#Results') IS NOT NULL 
+DROP TABLE #Results
 CREATE TABLE #Results (
     TableName nvarchar(128), 
     ColumnName nvarchar(128), 
     ColumnValue nvarchar(max),
     ColumnType nvarchar(20))
 
-/* LOOP THROUGH ALL TABLES IN THE DATABASE */
-
-SET NOCOUNT ON
+SET NOCOUNT ON 
 
 DECLARE @TableName nvarchar(256) = '',
         @ColumnName nvarchar(128),
         @ColumnType nvarchar(20), 
         @QuotedSearchStrColumnValue nvarchar(110), 
-        @QuotedSearchStrColumnName nvarchar(110)
+        @QuotedSearchStrColumnName nvarchar(110)   
 
 SET @QuotedSearchStrColumnValue = QUOTENAME(@SearchStrColumnValue,'''')
 
@@ -54,15 +49,13 @@ BEGIN
     IF @TableName IS NOT NULL
     BEGIN
 
-        /* SELECTING APPROPRIATE COLUMNS AND SEARCHING FOR MATCHES */
-
         DECLARE @sql VARCHAR(MAX)
 
         SET @sql = 'SELECT QUOTENAME(COLUMN_NAME),DATA_TYPE
-                FROM    INFORMATION_SCHEMA.COLUMNS
-                WHERE       TABLE_SCHEMA    = PARSENAME(''' + @TableName + ''', 2)
-                AND TABLE_NAME  = PARSENAME(''' + @TableName + ''', 1)
-                AND DATA_TYPE IN (' + 
+            FROM  INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = PARSENAME(''' + @TableName + ''', 2)
+            AND TABLE_NAME = PARSENAME(''' + @TableName + ''', 1)
+            AND DATA_TYPE IN (' + 
                 CASE 
                     WHEN ISNUMERIC(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@SearchStrColumnValue,'%',''),'_',''),'[',''),']',''),'-','')) = 1 
                         THEN '''tinyint'',''int'',''smallint'',''bigint'',''numeric'',''decimal'',''smallmoney'',''money'',' 
@@ -73,12 +66,13 @@ BEGIN
                         THEN ',''xml''' 
                         ELSE '' 
                     END + ')
-                AND COLUMN_NAME LIKE COALESCE(' + 
+            AND COLUMN_NAME LIKE COALESCE(' + 
                 CASE 
                     WHEN @SearchStrColumnName IS NULL 
                     THEN 'NULL' 
                     ELSE '''' + @SearchStrColumnName + '''' 
-                END  + ',COLUMN_NAME)'
+                END  + 
+            ',COLUMN_NAME)'
 
         INSERT INTO @ColumnNameTable
         EXEC (@sql)
@@ -92,13 +86,13 @@ BEGIN
             
             SET @sql = 'SELECT ''' + @TableName + ''',''' + @ColumnName + ''',' + 
                 CASE @ColumnType 
-                    WHEN 'xml' THEN 'LEFT(CAST(' + @ColumnName + ' AS nvarchar(MAX)), 4096),'''
-                    WHEN 'timestamp' THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + '),'''
+                    WHEN 'xml' THEN 'LEFT(CAST(' + @ColumnName + ' AS nvarchar(MAX)), 4096),''' 
+                    WHEN 'timestamp' THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + '),''' 
                     ELSE 'LEFT(' + @ColumnName + ', 4096),''' 
                 END + @ColumnType + '''
                 FROM ' + @TableName + ' (NOLOCK) ' + ' WHERE ' + 
                 CASE @ColumnType 
-                    WHEN 'xml' THEN 'CAST(' + @ColumnName + ' AS nvarchar(MAX))'
+                    WHEN 'xml' THEN 'CAST(' + @ColumnName + ' AS nvarchar(MAX))' 
                     WHEN 'timestamp' THEN 'master.dbo.fn_varbintohexstr('+ @ColumnName + ')'
                     ELSE @ColumnName 
                 END + ' LIKE ' + @QuotedSearchStrColumnValue
@@ -125,9 +119,7 @@ BEGIN
     END
 END
 
-/* OUTPUT OF RESULTS */
-
-SET NOCOUNT OFF
+SET NOCOUNT OFF 
 
 SELECT TableName, ColumnName, ColumnValue, ColumnType, COUNT(*) AS Count 
 FROM #Results
