@@ -19,4 +19,4 @@ END
 $func$  LANGUAGE plpgsql
 
 -- Usage:
-SELECT * FROM search_db('paste your value here');
+SELECT * FROM search_db('%YOUR_SEARCH_STARTS_HERE%');
